@@ -12,11 +12,10 @@ from app.consumer import EventConsumer
 from app.database import engine
 from app.exceptions import register_exception_handlers
 from app.messaging import EventPublisher
+from app.request_context import add_request_id_middleware, setup_logging
 from app.routes import health, projects, tasks
 
-logging.basicConfig(
-    level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 INSTANCE_ID = socket.gethostname()
@@ -75,6 +74,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 register_exception_handlers(app)
+add_request_id_middleware(app)
 
 
 @app.middleware("http")

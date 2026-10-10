@@ -8,12 +8,11 @@ from app.config import settings
 from app.database import SessionLocal, engine
 from app.exceptions import register_exception_handlers
 from app.messaging import EventPublisher
+from app.request_context import add_request_id_middleware, setup_logging
 from app.routes import auth, health, users
 from app.services.auth import ensure_admin
 
-logging.basicConfig(
-    level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +45,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 register_exception_handlers(app)
+add_request_id_middleware(app)
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")

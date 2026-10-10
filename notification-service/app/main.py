@@ -9,11 +9,10 @@ from app.config import settings
 from app.consumer import EventConsumer
 from app.database import engine
 from app.exceptions import register_exception_handlers
+from app.request_context import add_request_id_middleware, setup_logging
 from app.routes import health, notifications
 
-logging.basicConfig(
-    level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +52,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 register_exception_handlers(app)
+add_request_id_middleware(app)
 
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(health.router)
