@@ -14,7 +14,7 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed_password: str) -> bool:
     try:
         return bcrypt.checkpw(password.encode(), hashed_password.encode())
-    except ValueError:  # пароль длиннее 72 байт или битый хэш
+    except ValueError:
         return False
 
 

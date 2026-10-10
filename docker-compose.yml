@@ -5,6 +5,17 @@ x-app-healthcheck: &app-healthcheck
   retries: 5
   start_period: 15s
 
+x-task-service: &task-service
+  build: ./task-service
+  env_file: .env
+  environment: { DB_NAME: tasks_db, SERVICE_NAME: task-service }
+  depends_on:
+    task-migrations: { condition: service_completed_successfully }
+    redis: { condition: service_healthy }
+    rabbitmq: { condition: service_healthy }
+  healthcheck: *app-healthcheck
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -48,6 +59,22 @@ services:
       rabbitmq: { condition: service_healthy }
     healthcheck: *app-healthcheck
     restart: unless-stopped
+
+  task-migrations:
+    build: ./task-service
+    env_file: .env
+    environment: { DB_NAME: tasks_db }
+    command: alembic upgrade head
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  task-service-1:
+    <<: *task-service
+    ports: ["8002:8000"]  # временно, до появления Nginx (этап 6)
+
+  task-service-2:
+    <<: *task-service
 
 volumes:
   pg_data:

@@ -25,6 +25,10 @@ class EventPublisher:
         self._connection: AbstractRobustConnection | None = None
         self._exchange: AbstractExchange | None = None
 
+    @property
+    def is_connected(self) -> bool:
+        return self._exchange is not None and not self._connection.is_closed
+
     async def connect(self) -> None:
         for attempt in range(1, CONNECT_ATTEMPTS + 1):
             try:
@@ -51,9 +55,11 @@ class EventPublisher:
             "producer": self.service_name,
             "payload": payload,
         }
+        if not self.is_connected:
+            logger.warning("RabbitMQ is not connected, event %s dropped", event_type)
+            events_published_total.labels(event_type=event_type, result="error").inc()
+            return
         try:
-            if self._exchange is None:
-                raise RuntimeError("publisher is not connected")
             message = Message(
                 json.dumps(envelope).encode(),
                 content_type="application/json",
