@@ -5,12 +5,18 @@ from fastapi import APIRouter, Query, status
 from app.dependencies import CacheDep, CurrentUser, PublisherDep, SessionDep
 from app.models import TaskStatus
 from app.schemas import TaskRead, TaskStatusUpdate, TaskUpdate
+from app.schemas.errors import error_responses
 from app.services import tasks as tasks_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.get("/my", response_model=list[TaskRead])
+@router.get(
+    "/my",
+    response_model=list[TaskRead],
+    summary="Задачи, назначенные на меня",
+    responses=error_responses(401),
+)
 async def my_tasks(
     user: CurrentUser,
     session: SessionDep,
@@ -21,12 +27,22 @@ async def my_tasks(
     return await tasks_service.list_my_tasks(session, user, status, limit, offset)
 
 
-@router.get("/{task_id}", response_model=TaskRead)
+@router.get(
+    "/{task_id}",
+    response_model=TaskRead,
+    summary="Одна задача",
+    responses=error_responses(401, 403, 404),
+)
 async def get_task(task_id: int, user: CurrentUser, session: SessionDep):
     return await tasks_service.get_task(session, user, task_id)
 
 
-@router.patch("/{task_id}", response_model=TaskRead)
+@router.patch(
+    "/{task_id}",
+    response_model=TaskRead,
+    summary="Изменить задачу (создатель, owner или admin)",
+    responses=error_responses(400, 401, 403, 404),
+)
 async def update_task(
     task_id: int,
     data: TaskUpdate,
@@ -38,7 +54,12 @@ async def update_task(
     return await tasks_service.update_task(session, cache, publisher, user, task_id, data)
 
 
-@router.patch("/{task_id}/status", response_model=TaskRead)
+@router.patch(
+    "/{task_id}/status",
+    response_model=TaskRead,
+    summary="Сменить статус (исполнитель, owner или admin)",
+    responses=error_responses(401, 403, 404),
+)
 async def change_status(
     task_id: int,
     data: TaskStatusUpdate,
@@ -50,6 +71,11 @@ async def change_status(
     return await tasks_service.change_status(session, cache, publisher, user, task_id, data)
 
 
-@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить задачу (создатель, owner или admin)",
+    responses=error_responses(401, 403, 404),
+)
 async def delete_task(task_id: int, user: CurrentUser, session: SessionDep, cache: CacheDep):
     await tasks_service.delete_task(session, cache, user, task_id)

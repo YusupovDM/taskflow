@@ -11,12 +11,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health")
+@router.get("/health", summary="Liveness: процесс жив")
 async def health():
     return {"status": "ok"}
 
 
-@router.get("/health/ready")
+@router.get("/health/ready", summary="Readiness: проверка зависимостей")
 async def ready(request: Request, session: SessionDep):
     """БД обязательна (иначе 503); Redis и брокер показываются в теле, но статус не валят."""
     try:

@@ -11,12 +11,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health")
+@router.get("/health", summary="Liveness: процесс жив")
 async def health():
     return {"status": "ok"}
 
 
-@router.get("/health/ready")
+@router.get("/health/ready", summary="Readiness: проверка зависимостей")
 async def ready(session: SessionDep):
     try:
         await session.execute(text("SELECT 1"))

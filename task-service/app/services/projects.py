@@ -130,7 +130,6 @@ async def remove_member(
     if member is None:
         raise NotFound("Member not found")
     await session.delete(member)
-    # бывший участник больше не может быть исполнителем задач этого проекта
     await session.execute(
         update(Task)
         .where(Task.project_id == project_id, Task.assignee_id == member_id)
@@ -138,4 +137,4 @@ async def remove_member(
     )
     await session.commit()
     await cache.invalidate_project(project_id)
-    await cache.invalidate_tasks(project_id)  # у задач мог смениться исполнитель
+    await cache.invalidate_tasks(project_id)
