@@ -7,6 +7,7 @@ x-app-healthcheck: &app-healthcheck
 
 x-task-service: &task-service
   build: ./task-service
+  image: taskflow/task-service
   env_file: .env
   environment: { DB_NAME: tasks_db, SERVICE_NAME: task-service }
   depends_on:
@@ -20,7 +21,7 @@ services:
   postgres:
     image: postgres:16-alpine
     env_file: .env
-    ports: ["5433:5432"]  # 5433 на хосте, чтобы не конфликтовать с локальным PostgreSQL
+    ports: ["5433:5432"]  # для локальных тестов и psql; 5433 — чтобы не конфликтовать с локальным PostgreSQL
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -33,7 +34,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
     volumes: [redis_data:/data]
     healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10 }
     restart: unless-stopped
@@ -43,13 +43,14 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-    ports: ["5672:5672", "15672:15672"]
+    ports: ["15672:15672"]  # management UI
     volumes: [rabbitmq_data:/var/lib/rabbitmq]
     healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 10s, timeout: 10s, retries: 10 }
     restart: unless-stopped
 
   auth-service:
     build: ./auth-service
+    image: taskflow/auth-service
     env_file: .env
     environment: { DB_NAME: auth_db, SERVICE_NAME: auth-service }
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -62,6 +63,7 @@ services:
 
   task-migrations:
     build: ./task-service
+    image: taskflow/task-service
     env_file: .env
     environment: { DB_NAME: tasks_db }
     command: alembic upgrade head
@@ -78,6 +80,7 @@ services:
 
   notification-service:
     build: ./notification-service
+    image: taskflow/notification-service
     env_file: .env
     environment: { DB_NAME: notifications_db, SERVICE_NAME: notification-service }
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
