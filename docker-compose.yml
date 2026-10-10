@@ -104,7 +104,17 @@ services:
       retries: 5
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on: [auth-service, task-service-1, task-service-2, notification-service]
+    restart: unless-stopped
+
 volumes:
   pg_data:
   redis_data:
   rabbitmq_data:
+  prometheus_data:

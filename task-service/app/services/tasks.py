@@ -186,7 +186,9 @@ async def change_status(
     task.status = data.status
     await session.commit()
     await cache.invalidate_tasks(project.id)
-    task_status_changes_total.labels(new_status=data.status.value).inc()
+    task_status_changes_total.labels(
+        from_status=old_status.value, to_status=data.status.value
+    ).inc()
 
     task = await _load_task(session, task_id)
     await publisher.publish(
