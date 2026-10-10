@@ -24,5 +24,6 @@ async def ready(request: Request, session: SessionDep):
     except Exception:
         logger.exception("Readiness check failed")
         return JSONResponse({"status": "unavailable", "database": "error"}, status_code=503)
-    rabbitmq = "ok" if request.app.state.publisher.is_connected else "degraded"
+    state = request.app.state
+    rabbitmq = "ok" if state.publisher.is_connected and state.consumer.is_connected else "degraded"
     return {"status": "ok", "database": "ok", "rabbitmq": rabbitmq}

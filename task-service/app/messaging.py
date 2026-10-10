@@ -18,6 +18,21 @@ CONNECT_ATTEMPTS = 10
 CONNECT_DELAY_SECONDS = 3
 
 
+async def connect_with_retry(url: str) -> AbstractRobustConnection:
+    """connect_robust с ретраями: до CONNECT_ATTEMPTS попыток с паузой CONNECT_DELAY_SECONDS."""
+    for attempt in range(1, CONNECT_ATTEMPTS + 1):
+        try:
+            return await aio_pika.connect_robust(url)
+        except Exception as exc:
+            logger.warning(
+                "RabbitMQ connect attempt %s/%s failed: %s", attempt, CONNECT_ATTEMPTS, exc
+            )
+            if attempt == CONNECT_ATTEMPTS:
+                raise
+            await asyncio.sleep(CONNECT_DELAY_SECONDS)
+    raise RuntimeError("unreachable")
+
+
 class EventPublisher:
     def __init__(self, url: str, service_name: str) -> None:
         self.url = url
@@ -30,17 +45,7 @@ class EventPublisher:
         return self._exchange is not None and not self._connection.is_closed
 
     async def connect(self) -> None:
-        for attempt in range(1, CONNECT_ATTEMPTS + 1):
-            try:
-                self._connection = await aio_pika.connect_robust(self.url)
-                break
-            except Exception as exc:
-                logger.warning(
-                    "RabbitMQ connect attempt %s/%s failed: %s", attempt, CONNECT_ATTEMPTS, exc
-                )
-                if attempt == CONNECT_ATTEMPTS:
-                    raise
-                await asyncio.sleep(CONNECT_DELAY_SECONDS)
+        self._connection = await connect_with_retry(self.url)
         channel = await self._connection.channel()
         self._exchange = await channel.declare_exchange(
             EXCHANGE_NAME, ExchangeType.TOPIC, durable=True
