@@ -18,7 +18,7 @@ async def health():
 
 @router.get("/health/ready")
 async def ready(request: Request, session: SessionDep):
-    """БД обязательна (иначе 503); брокер показывается в теле, но статус не валит."""
+    """БД обязательна (иначе 503); Redis и брокер показываются в теле, но статус не валят."""
     try:
         await session.execute(text("SELECT 1"))
     except Exception:
@@ -26,4 +26,5 @@ async def ready(request: Request, session: SessionDep):
         return JSONResponse({"status": "unavailable", "database": "error"}, status_code=503)
     state = request.app.state
     rabbitmq = "ok" if state.publisher.is_connected and state.consumer.is_connected else "degraded"
-    return {"status": "ok", "database": "ok", "rabbitmq": rabbitmq}
+    redis = "ok" if await state.cache.ping() else "degraded"
+    return {"status": "ok", "database": "ok", "redis": redis, "rabbitmq": rabbitmq}

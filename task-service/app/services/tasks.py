@@ -4,6 +4,8 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.cache import Cache, tasks_list_key, tasks_version_key
+from app.config import settings
 from app.dependencies import AuthUser
 from app.exceptions import BadRequest, Forbidden, NotFound
 from app.messaging import EventPublisher
@@ -42,6 +44,7 @@ def _base_payload(task: Task, project: Project) -> dict:
 
 async def create_task(
     session: AsyncSession,
+    cache: Cache,
     publisher: EventPublisher,
     user: AuthUser,
     project_id: int,
@@ -54,6 +57,7 @@ async def create_task(
     task = Task(project_id=project_id, creator_id=user.id, **data.model_dump())
     session.add(task)
     await session.commit()
+    await cache.invalidate_tasks(project_id)
     tasks_created_total.inc()
 
     task = await _load_task(session, task.id)
@@ -70,6 +74,7 @@ async def create_task(
 
 async def list_project_tasks(
     session: AsyncSession,
+    cache: Cache,
     user: AuthUser,
     project_id: int,
     *,
@@ -79,7 +84,21 @@ async def list_project_tasks(
     limit: int,
     offset: int,
 ) -> list[TaskRead]:
+    # права проверяем ДО кэша: в кэше данные, а не решение о доступе
     await get_project_for_member(session, project_id, user)
+    params = {
+        "status": status,
+        "assignee_id": assignee_id,
+        "overdue": overdue,
+        "limit": limit,
+        "offset": offset,
+    }
+    version = await cache.get_int(tasks_version_key(project_id))
+    key = tasks_list_key(project_id, version, params)
+    cached = await cache.get_json(key)
+    if cached is not None:
+        return [TaskRead.model_validate(t) for t in cached]
+
     stmt = _tasks_query().where(Task.project_id == project_id)
     if status is not None:
         stmt = stmt.where(Task.status == status)
@@ -88,7 +107,11 @@ async def list_project_tasks(
     if overdue:
         stmt = stmt.where(Task.deadline < datetime.now(UTC), Task.status != TaskStatus.DONE)
     tasks = await session.scalars(stmt.order_by(Task.id).limit(limit).offset(offset))
-    return [TaskRead.model_validate(t) for t in tasks]
+    result = [TaskRead.model_validate(t) for t in tasks]
+    await cache.set_json(
+        key, [t.model_dump(mode="json") for t in result], settings.cache_ttl_seconds
+    )
+    return result
 
 
 async def list_my_tasks(
@@ -110,6 +133,7 @@ async def get_task(session: AsyncSession, user: AuthUser, task_id: int) -> TaskR
 
 async def update_task(
     session: AsyncSession,
+    cache: Cache,
     publisher: EventPublisher,
     user: AuthUser,
     task_id: int,
@@ -132,6 +156,7 @@ async def update_task(
     for field, value in changes.items():
         setattr(task, field, value)
     await session.commit()
+    await cache.invalidate_tasks(project.id)
 
     task = await _load_task(session, task_id)
     if assignee_changed and new_assignee is not None:
@@ -144,6 +169,7 @@ async def update_task(
 
 async def change_status(
     session: AsyncSession,
+    cache: Cache,
     publisher: EventPublisher,
     user: AuthUser,
     task_id: int,
@@ -159,6 +185,7 @@ async def change_status(
         return TaskRead.model_validate(task)
     task.status = data.status
     await session.commit()
+    await cache.invalidate_tasks(project.id)
     task_status_changes_total.labels(new_status=data.status.value).inc()
 
     task = await _load_task(session, task_id)
@@ -176,10 +203,11 @@ async def change_status(
     return TaskRead.model_validate(task)
 
 
-async def delete_task(session: AsyncSession, user: AuthUser, task_id: int) -> None:
+async def delete_task(session: AsyncSession, cache: Cache, user: AuthUser, task_id: int) -> None:
     task = await _load_task(session, task_id)
     project = await load_project(session, task.project_id)
     if not (user.is_admin or user.id in (project.owner_id, task.creator_id)):
         raise Forbidden("Only the task creator, project owner or admin can delete this task")
     await session.delete(task)
     await session.commit()
+    await cache.invalidate_tasks(project.id)

@@ -10,3 +10,4 @@ task_status_changes_total = Counter(
 events_consumed_total = Counter(
     "events_consumed_total", "Events consumed from RabbitMQ", ["event_type", "result"]
 )
+cache_requests_total = Counter("cache_requests_total", "Cache lookups", ["result"])

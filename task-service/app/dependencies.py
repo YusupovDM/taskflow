@@ -6,6 +6,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache import Cache
 from app.database import get_session
 from app.exceptions import NotAuthenticated
 from app.messaging import EventPublisher
@@ -34,6 +35,13 @@ def get_publisher(request: Request) -> EventPublisher:
 
 
 PublisherDep = Annotated[EventPublisher, Depends(get_publisher)]
+
+
+def get_cache(request: Request) -> Cache:
+    return request.app.state.cache
+
+
+CacheDep = Annotated[Cache, Depends(get_cache)]
 
 
 async def get_current_user(

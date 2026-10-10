@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
-from app.dependencies import CurrentUser, PublisherDep, SessionDep
+from app.dependencies import CacheDep, CurrentUser, PublisherDep, SessionDep
 from app.models import TaskStatus
 from app.schemas import TaskRead, TaskStatusUpdate, TaskUpdate
 from app.services import tasks as tasks_service
@@ -32,9 +32,10 @@ async def update_task(
     data: TaskUpdate,
     user: CurrentUser,
     session: SessionDep,
+    cache: CacheDep,
     publisher: PublisherDep,
 ):
-    return await tasks_service.update_task(session, publisher, user, task_id, data)
+    return await tasks_service.update_task(session, cache, publisher, user, task_id, data)
 
 
 @router.patch("/{task_id}/status", response_model=TaskRead)
@@ -43,11 +44,12 @@ async def change_status(
     data: TaskStatusUpdate,
     user: CurrentUser,
     session: SessionDep,
+    cache: CacheDep,
     publisher: PublisherDep,
 ):
-    return await tasks_service.change_status(session, publisher, user, task_id, data)
+    return await tasks_service.change_status(session, cache, publisher, user, task_id, data)
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task(task_id: int, user: CurrentUser, session: SessionDep):
-    await tasks_service.delete_task(session, user, task_id)
+async def delete_task(task_id: int, user: CurrentUser, session: SessionDep, cache: CacheDep):
+    await tasks_service.delete_task(session, cache, user, task_id)

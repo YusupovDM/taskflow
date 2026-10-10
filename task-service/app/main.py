@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Request
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from app.cache import Cache, create_redis
 from app.config import settings
 from app.consumer import EventConsumer
 from app.database import engine
@@ -43,6 +44,10 @@ async def lifespan(app: FastAPI):
     consumer = EventConsumer(settings.rabbitmq_url)
     app.state.publisher = publisher
     app.state.consumer = consumer
+    cache = Cache(create_redis(settings.redis_url))
+    app.state.cache = cache
+    if not await cache.ping():
+        logger.warning("Redis unavailable at startup, working without cache")
     background: list[asyncio.Task] = []
     if settings.rabbitmq_enabled:
         # подключение в фоне: сервис стартует и без брокера (graceful degradation)
@@ -59,6 +64,7 @@ async def lifespan(app: FastAPI):
             await task
     await consumer.close()
     await publisher.close()
+    await cache.close()
     await engine.dispose()
 
 

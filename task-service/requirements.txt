@@ -12,3 +12,4 @@ bcrypt==5.0.0
 aio-pika==10.1.1
 prometheus-fastapi-instrumentator==8.1.0
 prometheus-client==0.26.0
+redis==8.1.0

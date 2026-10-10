@@ -3,6 +3,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.cache import Cache, project_key
+from app.config import settings
 from app.dependencies import AuthUser
 from app.exceptions import BadRequest, Conflict, NotFound
 from app.models import Project, ProjectMember, Task, UserReplica
@@ -58,13 +60,22 @@ async def list_projects(
     return [ProjectRead.model_validate(p) for p in projects]
 
 
-async def get_project(session: AsyncSession, user: AuthUser, project_id: int) -> ProjectDetail:
+async def get_project(
+    session: AsyncSession, cache: Cache, user: AuthUser, project_id: int
+) -> ProjectDetail:
+    # права проверяем ДО кэша: в кэше данные, а не решение о доступе
     await get_project_for_member(session, project_id, user)
-    return await _project_detail(session, project_id)
+    key = project_key(project_id)
+    cached = await cache.get_json(key)
+    if cached is not None:
+        return ProjectDetail.model_validate(cached)
+    detail = await _project_detail(session, project_id)
+    await cache.set_json(key, detail.model_dump(mode="json"), settings.cache_ttl_seconds)
+    return detail
 
 
 async def update_project(
-    session: AsyncSession, user: AuthUser, project_id: int, data: ProjectUpdate
+    session: AsyncSession, cache: Cache, user: AuthUser, project_id: int, data: ProjectUpdate
 ) -> ProjectDetail:
     project = await get_project_for_owner(session, project_id, user)
     changes = data.model_dump(exclude_unset=True)
@@ -73,17 +84,22 @@ async def update_project(
     for field, value in changes.items():
         setattr(project, field, value)
     await session.commit()
+    await cache.invalidate_project(project_id)
     return await _project_detail(session, project_id)
 
 
-async def delete_project(session: AsyncSession, user: AuthUser, project_id: int) -> None:
+async def delete_project(
+    session: AsyncSession, cache: Cache, user: AuthUser, project_id: int
+) -> None:
     project = await get_project_for_owner(session, project_id, user)
     await session.delete(project)  # участники и задачи удаляются каскадом в БД
     await session.commit()
+    await cache.invalidate_project(project_id)
+    await cache.invalidate_tasks(project_id)
 
 
 async def add_member(
-    session: AsyncSession, user: AuthUser, project_id: int, member_id: int
+    session: AsyncSession, cache: Cache, user: AuthUser, project_id: int, member_id: int
 ) -> ProjectDetail:
     await get_project_for_owner(session, project_id, user)
     if await session.get(UserReplica, member_id) is None:
@@ -96,11 +112,12 @@ async def add_member(
     except IntegrityError:
         await session.rollback()
         raise Conflict("User is already a member of this project") from None
+    await cache.invalidate_project(project_id)
     return await _project_detail(session, project_id)
 
 
 async def remove_member(
-    session: AsyncSession, user: AuthUser, project_id: int, member_id: int
+    session: AsyncSession, cache: Cache, user: AuthUser, project_id: int, member_id: int
 ) -> None:
     project = await get_project_for_owner(session, project_id, user)
     if member_id == project.owner_id:
@@ -120,3 +137,5 @@ async def remove_member(
         .values(assignee_id=None)
     )
     await session.commit()
+    await cache.invalidate_project(project_id)
+    await cache.invalidate_tasks(project_id)  # у задач мог смениться исполнитель
