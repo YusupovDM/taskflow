@@ -1,7 +1,9 @@
 import os
 
-# до импорта app: настройки читаются при импорте
-os.environ.setdefault("JWT_SECRET", "test-secret-key-for-pytest-only-32b")
+# до импорта app: настройки читаются при импорте.
+# В CI JWT_SECRET приходит из секрета TEST_JWT_SECRET; если его нет — тестовое значение.
+if not os.environ.get("JWT_SECRET"):
+    os.environ["JWT_SECRET"] = "test-secret-key-for-pytest-only-32b"
 os.environ["RABBITMQ_ENABLED"] = "false"
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+asyncpg://taskflow:change_me@localhost:5433/tasks_test"
