@@ -1,164 +1,127 @@
 # TaskFlow
 
-Сервис управления задачами: проекты, команды (участники проекта), задачи с исполнителями,
-приоритетами и дедлайнами, асинхронные уведомления. Дипломный проект по курсу FastAPI.
+Сервис для управления задачами в команде: проекты, участники, задачи с исполнителями,
+приоритетами и дедлайнами, уведомления. Дипломный проект по курсу FastAPI.
 
-Подробности об устройстве системы — в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Состоит из трёх микросервисов на FastAPI, которые общаются через RabbitMQ:
 
-## Стек
+| Сервис | Что делает | БД |
+|---|---|---|
+| `auth-service` | регистрация, логин, JWT, роли | `auth_db` |
+| `task-service` (2 инстанса) | проекты, участники, задачи, кэш в Redis | `tasks_db` |
+| `notification-service` | уведомления пользователям | `notifications_db` |
 
-- Python 3.13, FastAPI, Uvicorn, Pydantic v2, pydantic-settings
-- PostgreSQL 16, SQLAlchemy 2 (async, `AsyncSession`), asyncpg, Alembic
-- RabbitMQ 3 (aio-pika), Redis 7 (`redis.asyncio`)
-- JWT (PyJWT, HS256), bcrypt
-- Nginx (reverse proxy, балансировка, rate limit), Prometheus
-- pytest, pytest-asyncio, httpx, fakeredis, ruff
-- Docker, docker compose, GitHub Actions
+Снаружи всё доступно через Nginx (порт 80). Ещё есть PostgreSQL, Redis, RabbitMQ и Prometheus.
 
-## Архитектура
+Стек: Python 3.13, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16, RabbitMQ (aio-pika),
+Redis, PyJWT, Nginx, Prometheus, pytest, ruff, Docker, GitHub Actions.
 
-```mermaid
-flowchart TB
-    client([Клиент]) --> nginx[Nginx :80<br/>rate limit, балансировка]
-    nginx --> auth[auth-service]
-    nginx --> task1[task-service-1]
-    nginx --> task2[task-service-2]
-    nginx --> notif[notification-service]
+## Что нужно установить
 
-    auth -- user.registered --> mq{{RabbitMQ<br/>topic taskflow.events}}
-    task1 & task2 -- task.* --> mq
-    mq -- user.registered --> task1 & task2
-    mq -- "все события (#)" --> notif
+- Docker Desktop (с docker compose)
+- Python 3.13 — только если хотите запускать тесты локально
 
-    task1 & task2 <--> redis[(Redis<br/>кэш)]
-
-    auth --> authdb[(auth_db)]
-    task1 & task2 --> tasksdb[(tasks_db)]
-    notif --> notifdb[(notifications_db)]
-
-    prom[Prometheus] -. /metrics .-> auth & task1 & task2 & notif
-```
-
-| Сервис | Отвечает за | БД | Публикует | Слушает |
-|---|---|---|---|---|
-| `auth-service` | пользователи, регистрация, логин, роли, JWT | `auth_db` | `user.registered` | — |
-| `task-service` ×2 | проекты, участники, задачи, кэш | `tasks_db` | `task.created`, `task.assigned`, `task.status_changed` | `user.registered` |
-| `notification-service` | уведомления пользователей | `notifications_db` | — | все события |
-
-Три базы живут в одном контейнере PostgreSQL, но каждый сервис ходит только в свою.
-JWT проверяется в каждом сервисе локально, по общему секрету. Между собой сервисы общаются
-только через RabbitMQ.
-
-## Быстрый старт
+## Запуск
 
 ```bash
-cp .env.example .env          # при необходимости поменяйте пароли и JWT_SECRET
+git clone https://github.com/YusupovDM/taskflow.git
+cd taskflow
+cp .env.example .env
 docker compose up -d --build
-docker compose ps             # через ~1 минуту все сервисы healthy, task-migrations — Exited (0)
 ```
 
-Миграции применяются автоматически: auth и notification запускают `alembic upgrade head` перед стартом.
-Для task-service это делает одноразовый контейнер `task-migrations`, чтобы два инстанса
-не накатывали миграцию одновременно.
+Через минуту проверить, что всё поднялось:
 
-### Адреса
+```bash
+docker compose ps
+```
 
-| Что | URL |
+Все сервисы должны быть `healthy`, а `task-migrations` — `Exited (0)` (он один раз накатывает
+миграции и завершается, так и должно быть). Миграции auth и notification применяются сами при старте.
+
+Остановить: `docker compose down`. Остановить и удалить данные: `docker compose down -v`.
+
+## Адреса
+
+| Что | Где |
 |---|---|
-| API (через Nginx) | http://localhost/api/v1/... |
 | Swagger auth-service | http://localhost/docs/auth |
 | Swagger task-service | http://localhost/docs/tasks |
 | Swagger notification-service | http://localhost/docs/notifications |
-| RabbitMQ UI | http://localhost:15672 (логин/пароль — `RABBITMQ_USER` / `RABBITMQ_PASSWORD` из `.env`) |
-| Prometheus | http://localhost:9090 (таргеты: http://localhost:9090/targets) |
-| Health Nginx | http://localhost/health |
+| API | http://localhost/api/v1/... |
+| RabbitMQ | http://localhost:15672 (логин и пароль из `.env`: `RABBITMQ_USER` / `RABBITMQ_PASSWORD`) |
+| Prometheus | http://localhost:9090/targets |
 
-Порты сервисов наружу не открыты, всё идёт через Nginx. PostgreSQL проброшен на `localhost:5433`
-для локальных тестов и `psql`.
+Админ создаётся автоматически при первом запуске: `admin@taskflow.local` / `Admin12345!`
+(меняется в `.env`).
 
-### Админ по умолчанию
+## Как проверить, что всё работает
 
-При первом старте auth-service создаёт администратора из `.env`:
-`ADMIN_EMAIL=admin@taskflow.local`, `ADMIN_PASSWORD=Admin12345!`.
+Удобнее всего через Swagger.
 
-### Ручной сценарий
-
-1. `POST /api/v1/auth/register` — зарегистрировать двух пользователей (A и B).
-2. `POST /api/v1/auth/login` под A → скопировать `access_token` → кнопка **Authorize** в Swagger `/docs/tasks`.
-3. `POST /api/v1/projects` — создать проект; A — владелец.
-4. `POST /api/v1/projects/{id}/members` с `{"user_id": <id B>}` — добавить B в команду.
-5. `POST /api/v1/projects/{id}/tasks` с `"assignee_id": <id B>` и дедлайном в прошлом.
-6. Под B: `GET /api/v1/notifications` (в `/docs/notifications`) — там приветствие и уведомление о назначении.
-7. Под B: `PATCH /api/v1/tasks/{id}/status` → `in_progress`; у A появится уведомление о смене статуса.
-8. `GET /api/v1/projects/{id}/tasks?overdue=true` — задача в списке просроченных.
+1. В http://localhost/docs/auth через `POST /auth/register` зарегистрировать двух пользователей, A и B.
+   Запомнить их `id`.
+2. `POST /auth/login` под A, скопировать `access_token`.
+3. Открыть http://localhost/docs/tasks, нажать **Authorize**, вставить токен.
+4. `POST /projects` — создать проект. A станет владельцем.
+5. `POST /projects/{id}/members` с `{"user_id": <id B>}` — добавить B в проект.
+6. `POST /projects/{id}/tasks` — создать задачу с `"assignee_id": <id B>` и дедлайном в прошлом.
+7. Залогиниться под B, открыть http://localhost/docs/notifications, авторизоваться и вызвать
+   `GET /notifications` — там будет приветствие и уведомление о назначенной задаче.
+8. Под B вызвать `PATCH /tasks/{id}/status` со статусом `in_progress` — у A появится уведомление.
+9. `GET /projects/{id}/tasks?overdue=true` — задача будет в списке просроченных.
 
 ## Эндпоинты
 
-Все пути с префиксом `/api/v1`, кроме служебных. Где написано «JWT», нужен заголовок `Authorization: Bearer <token>`.
+Все пути начинаются с `/api/v1`. Для большинства нужен заголовок `Authorization: Bearer <token>`.
 
 **auth-service**
 
-| Метод | Путь | Доступ | Описание |
-|---|---|---|---|
-| POST | `/auth/register` | все | регистрация → 201; дубль email → 409 |
-| POST | `/auth/login` | все | `{access_token, token_type}`; неверные данные → 401 |
-| GET | `/auth/me` | JWT | текущий пользователь |
-| GET | `/users` | admin | список пользователей (`limit`, `offset`) |
-| PATCH | `/users/{id}/role` | admin | сменить роль |
+- `POST /auth/register` — регистрация
+- `POST /auth/login` — получить токен
+- `GET /auth/me` — текущий пользователь
+- `GET /users` — список пользователей (только admin)
+- `PATCH /users/{id}/role` — сменить роль (только admin)
 
 **task-service**
 
-| Метод | Путь | Доступ | Описание |
-|---|---|---|---|
-| POST | `/projects` | JWT | создать проект |
-| GET | `/projects` | JWT | мои проекты (admin — все), с `members_count` |
-| GET | `/projects/{id}` | участник / admin | проект с участниками (кэш) |
-| PATCH | `/projects/{id}` | owner / admin | изменить название и описание |
-| DELETE | `/projects/{id}` | owner / admin | удалить проект |
-| POST | `/projects/{id}/members` | owner / admin | добавить участника (нет в реплике → 404) |
-| DELETE | `/projects/{id}/members/{user_id}` | owner / admin | удалить участника (владельца → 400) |
-| POST | `/projects/{id}/tasks` | участник / admin | создать задачу (исполнитель не участник → 400) |
-| GET | `/projects/{id}/tasks` | участник / admin | фильтры `status`, `assignee_id`, `overdue`, пагинация (кэш) |
-| GET | `/tasks/my` | JWT | задачи, назначенные на меня |
-| GET | `/tasks/{id}` | участник / admin | одна задача |
-| PATCH | `/tasks/{id}` | создатель / owner / admin | изменить поля задачи и исполнителя |
-| PATCH | `/tasks/{id}/status` | исполнитель / owner / admin | сменить статус |
-| DELETE | `/tasks/{id}` | создатель / owner / admin | удалить задачу |
+- `POST /projects`, `GET /projects` — создать проект, мои проекты
+- `GET / PATCH / DELETE /projects/{id}` — проект (менять и удалять может владелец или admin)
+- `POST /projects/{id}/members`, `DELETE /projects/{id}/members/{user_id}` — участники
+- `POST /projects/{id}/tasks`, `GET /projects/{id}/tasks` — задачи проекта
+  (фильтры `status`, `assignee_id`, `overdue`, пагинация `limit` / `offset`)
+- `GET /tasks/my` — задачи, назначенные на меня
+- `GET / PATCH / DELETE /tasks/{id}` — задача
+- `PATCH /tasks/{id}/status` — сменить статус (исполнитель, владелец проекта или admin)
 
 **notification-service**
 
-| Метод | Путь | Доступ | Описание |
-|---|---|---|---|
-| GET | `/notifications` | JWT | мои уведомления (`unread_only`, пагинация, новые сверху) |
-| PATCH | `/notifications/{id}/read` | JWT | отметить прочитанным (чужое → 404) |
-| POST | `/notifications/read-all` | JWT | отметить все прочитанными |
+- `GET /notifications` — мои уведомления (`unread_only=true` — только непрочитанные)
+- `PATCH /notifications/{id}/read` — отметить прочитанным
+- `POST /notifications/read-all` — отметить все
 
-**Служебные (в каждом сервисе):** `GET /health`, `GET /health/ready` (проверяет БД; Redis и RabbitMQ
-показываются как `ok`/`degraded`), `GET /metrics` (через Nginx закрыт, 403).
+В каждом сервисе есть `GET /health`, `GET /health/ready` и `GET /metrics`
+(метрики снаружи через Nginx закрыты, их забирает Prometheus).
 
-Ошибки всегда приходят в формате `{"detail": "..."}`.
+## Как это устроено
 
-## События
-
-Exchange `taskflow.events` (topic, durable). Сообщение — конверт
-`{event_id, event_type, occurred_at, producer, payload}`, routing key = `event_type`.
-
-| event_type | Кто публикует | payload | Кто обрабатывает |
-|---|---|---|---|
-| `user.registered` | auth | `user_id, email, full_name, role` | task-service (реплика пользователя), notification (приветствие) |
-| `task.created` | tasks | `task_id, project_id, project_name, title, creator_id, assignee_id` | notification (исполнителю, если он не создатель) |
-| `task.assigned` | tasks | `task_id, project_id, project_name, title, assignee_id, assigned_by` | notification (исполнителю) |
-| `task.status_changed` | tasks | `…, old_status, new_status, changed_by, assignee_id, owner_id` | notification (исполнителю и владельцу, кроме автора изменения) |
-
-Очереди: `task-service.users` (binding `user.registered`; оба инстанса — competing consumers)
-и `notification-service.events` (binding `#`). Сообщения, которые не удалось обработать,
-уходят через `taskflow.dlx` в очередь `taskflow.dead-letter`.
+- JWT выдаёт auth-service, а проверяет каждый сервис сам по общему секрету `JWT_SECRET`.
+- Сервисы не ходят друг к другу по HTTP, только через RabbitMQ (exchange `taskflow.events`).
+- `user.registered` — после регистрации; task-service сохраняет копию пользователя у себя,
+  notification-service присылает приветствие.
+- `task.created`, `task.assigned`, `task.status_changed` — notification-service по ним
+  создаёт уведомления.
+- Сообщения, которые не удалось обработать, попадают в очередь `taskflow.dead-letter`.
+- Список задач и карточка проекта кэшируются в Redis. При изменениях кэш сбрасывается.
+  Если Redis упал, сервис продолжает работать без кэша.
+- Nginx распределяет запросы между двумя инстансами task-service и ограничивает частоту
+  запросов (на логин и регистрацию строже).
+- Три базы лежат в одном контейнере PostgreSQL, но каждый сервис работает только со своей.
 
 ## Тесты
 
-47 тестов: unit и integration, RabbitMQ замокан через `AsyncMock`, Redis — через `fakeredis`. Тесты
-работают с настоящим PostgreSQL. Локально используется Postgres из compose (`localhost:5433`)
-и базы `auth_test`, `tasks_test`, `notifications_test`: их создаёт `docker/postgres/init.sql` при первом запуске.
+Тесты ходят в настоящий PostgreSQL, поэтому сначала нужно поднять его из compose
+(он проброшен на `localhost:5433`, тестовые базы создаются автоматически).
 
 ```bash
 python3.13 -m venv .venv
@@ -168,36 +131,23 @@ docker compose up -d postgres
 cd auth-service && ../.venv/bin/pytest -q && cd ..
 cd task-service && ../.venv/bin/pytest -q && cd ..
 cd notification-service && ../.venv/bin/pytest -q && cd ..
+
 .venv/bin/ruff check .
 ```
 
-Базу можно переопределить переменной `TEST_DATABASE_URL`. Если volume Postgres был создан
-до появления тестовых баз, создайте их вручную:
-`docker compose exec postgres psql -U taskflow -d postgres -c "CREATE DATABASE tasks_test"` (и так же для остальных).
+Если volume Postgres остался со старого запуска и тестовых баз нет, создать их вручную:
 
-## CI/CD
+```bash
+docker compose exec postgres psql -U taskflow -d postgres -c "CREATE DATABASE auth_test"
+docker compose exec postgres psql -U taskflow -d postgres -c "CREATE DATABASE tasks_test"
+docker compose exec postgres psql -U taskflow -d postgres -c "CREATE DATABASE notifications_test"
+```
 
-`.github/workflows/ci.yml` запускается на каждый push и pull request:
+## CI
 
-1. **lint** — `ruff check .`;
-2. **test** — `pytest` для каждого сервиса (matrix) с PostgreSQL как service-контейнером;
-3. **build** — только при push в `main`: собирает образы трёх сервисов и пушит в GHCR
-   (`ghcr.io/<owner>/taskflow-<service>:latest`).
+GitHub Actions (`.github/workflows/ci.yml`) на каждый push и pull request запускает ruff и тесты.
+При push в `main` ещё собирает Docker-образы и пушит их в GHCR.
 
-**Секрет:** добавьте `TEST_JWT_SECRET` в *Settings → Secrets and variables → Actions*,
-значение — любая длинная случайная строка. Если секрета нет, тесты возьмут тестовое значение.
-
-## Соответствие критериям
-
-| Критерий | Что сделано | Где |
-|---|---|---|
-| Архитектура и код | 3 микросервиса на FastAPI, REST, Pydantic, слои routes → services → models/database | `*/app/` |
-| БД и миграции | PostgreSQL, AsyncSession, 4 модели со связями, Alembic, 4 индекса, защита от N+1 (`selectinload`, `members_count` подзапросом) | `task-service/app/models`, `*/migrations/`, `task-service/tests/test_n_plus_one.py` |
-| RabbitMQ | topic exchange, 4 типа событий, 2 consumer'а, DLQ, идемпотентная обработка | `*/app/messaging.py`, `*/app/consumer.py` |
-| Docker | 3 Dockerfile, compose, `.env`, healthcheck, volumes, `depends_on` с condition | `docker-compose.yml`, `*/Dockerfile` |
-| Redis | 2 кэшируемых эндпоинта, инвалидация через версию-ключ, graceful degradation | `task-service/app/cache.py`, `task-service/tests/test_cache.py` |
-| Nginx | reverse proxy, 2 инстанса task-service (`least_conn`), rate limit, `X-Request-ID` | `nginx/nginx.conf` |
-| CI/CD | GitHub Actions: ruff, pytest на push, сборка образов, Secrets | `.github/workflows/ci.yml` |
-| Мониторинг | `/metrics` во всех сервисах, 8 кастомных метрик, `/health` и `/health/ready` | `*/app/metrics.py`, `prometheus/prometheus.yml` |
-| Тесты | 47 тестов: unit и integration, моки, фикстуры | `*/tests/` |
-| Документация | README, архитектура, Swagger с summary и кодами ошибок | `README.md`, `docs/ARCHITECTURE.md` |
+Для CI в настройках репозитория (Settings → Secrets and variables → Actions) можно добавить
+секрет `TEST_JWT_SECRET`. Чтобы образы пушились в GHCR, в Settings → Actions → General нужно
+включить «Read and write permissions».
